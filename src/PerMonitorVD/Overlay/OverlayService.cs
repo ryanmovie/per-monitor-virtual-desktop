@@ -10,6 +10,7 @@ public sealed class OverlayService
     private readonly Dictionary<string, WorkspaceTransitionForm> _transitions = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, BitmapSource> _previewFrames = new(StringComparer.OrdinalIgnoreCase);
     private Task _animationTask = Task.CompletedTask;
+    private bool _animationStarted;
     private readonly Dictionary<string, OverlayForm> _forms = new(StringComparer.OrdinalIgnoreCase);
 
     public OverlayService(SynchronizationContext? syncContext)
@@ -73,6 +74,7 @@ public sealed class OverlayService
                     active.Cancel();
                 await _animationTask;
             }
+            _animationStarted = false;
 
             outgoing = CopyPreviewFrame(monitorKey, outgoingWorkspaceId);
             if (outgoing is null)
@@ -125,51 +127,67 @@ public sealed class OverlayService
         if (_syncContext is null)
             return Task.CompletedTask;
 
-        try
-        {
-            if (!animate)
-            {
-                return InvokeOnUiThreadAsync(() =>
-                {
-                    transition.Hide();
-                    transition.ClearFrame();
-                    if (refreshPreview)
-                        RefreshPreview(monitorKey, workspaceId);
-                    return Task.FromResult(true);
-                });
-            }
-
-            _animationTask = PlayTransitionAsync(transition, monitorKey, workspaceId, refreshPreview);
-        }
-        catch (Exception ex)
-        {
-            Log.Warn($"Desktop animation ended early; workspace switching continues: {ex.Message}");
-        }
-
-        return Task.CompletedTask;
+        return FinishTransitionAsync(transition, animate, monitorKey, workspaceId, refreshPreview);
     }
 
-    private async Task PlayTransitionAsync(
+    internal void StartTransition(WorkspaceTransitionForm? transition)
+    {
+        if (transition is null || _syncContext is null || _animationStarted)
+            return;
+
+        _animationStarted = true;
+        _animationTask = PlayTransitionAsync(transition);
+    }
+
+    private async Task FinishTransitionAsync(
         WorkspaceTransitionForm transition,
+        bool animate,
         string monitorKey,
         string workspaceId,
         bool refreshPreview)
     {
         try
         {
+            if (animate && !_animationStarted)
+            {
+                _animationStarted = true;
+                _animationTask = PlayTransitionAsync(transition);
+            }
+            if (animate)
+                await _animationTask;
+
+            await InvokeOnUiThreadAsync(() =>
+            {
+                transition.Hide();
+                transition.ClearFrame();
+                if (refreshPreview)
+                    RefreshPreview(monitorKey, workspaceId);
+                return Task.FromResult(true);
+            });
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"Desktop animation ended early; workspace switching continues: {ex.Message}");
+            await InvokeOnUiThreadAsync(() =>
+            {
+                transition.Hide();
+                transition.ClearFrame();
+                return Task.FromResult(true);
+            });
+        }
+        finally
+        {
+            _animationStarted = false;
+        }
+    }
+
+    private async Task PlayTransitionAsync(WorkspaceTransitionForm transition)
+    {
+        try
+        {
             await InvokeOnUiThreadAsync(async () =>
             {
-                try
-                {
-                    await transition.PlayAsync();
-                }
-                finally
-                {
-                    transition.Hide();
-                    transition.ClearFrame();
-                    if (refreshPreview)
-                        RefreshPreview(monitorKey, workspaceId);
-                }
+                await transition.PlayAsync();
                 return true;
             });
         }

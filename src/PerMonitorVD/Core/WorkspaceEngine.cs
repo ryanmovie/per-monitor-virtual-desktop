@@ -569,6 +569,8 @@ public sealed class WorkspaceEngine
                 oldSlot.WorkspaceId,
                 newSlot.WorkspaceId)
             : null;
+        if (transition is not null)
+            _overlay.StartTransition(transition);
         var switched = false;
         try
         {

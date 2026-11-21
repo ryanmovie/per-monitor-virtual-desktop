@@ -487,6 +487,24 @@ public sealed class WorkspaceEngine
         }
     }
 
+    public async Task HandleForegroundWindowAsync(IntPtr hwnd)
+    {
+        var key = HwndUtil.Format(hwnd);
+        if (!_state.Windows.TryGetValue(key, out var record))
+            return;
+
+        var nativeDesktopId = _desktopBridge.GetWindowDesktopId(hwnd);
+        if (nativeDesktopId == Guid.Empty || nativeDesktopId == _state.ActiveCompositeDesktopId)
+            return;
+
+        record.CurrentNativeDesktopId = nativeDesktopId;
+        if (!_windowTracker.IsSameWindow(record))
+            return;
+
+        Log.Info($"Foreground window {key} is on a parking desktop; reactivating through PMVD.");
+        await ActivateWindowAsync(key);
+    }
+
     public async Task MergeWorkspaceAsync(string sourceWorkspaceId, string targetWorkspaceId)
     {
         if (string.Equals(sourceWorkspaceId, targetWorkspaceId, StringComparison.OrdinalIgnoreCase))

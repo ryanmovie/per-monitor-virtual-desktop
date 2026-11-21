@@ -78,7 +78,29 @@ public sealed class PerMonitorVdApplicationContext : ApplicationContext
                 TimeSpan.FromMilliseconds(Math.Clamp(_config.WinEventDebounceMs, 50, 2000)),
                 () => _engine.RefreshAsync("window-event"));
             _windowEvents = new WindowEventListener();
-            _windowEvents.WindowEvent += (_, _) => _windowEventDebouncer.Schedule();
+            _windowEvents.WindowEvent += (_, e) =>
+            {
+                if (e.EventType == Win32.EVENT_SYSTEM_FOREGROUND)
+                {
+                    var hwnd = e.Hwnd;
+                    if (_syncContext is null)
+                        _ = _engine.HandleForegroundWindowAsync(hwnd);
+                    else
+                        _syncContext.Post(async _ =>
+                        {
+                            try
+                            {
+                                await _engine.HandleForegroundWindowAsync(hwnd);
+                            }
+                            catch (Exception ex)
+                            {
+                                Log.Warn($"Foreground window reactivation failed: {ex.Message}");
+                            }
+                        }, null);
+                }
+
+                _windowEventDebouncer.Schedule();
+            };
             _windowEvents.Install();
         }
 

@@ -43,7 +43,7 @@ public sealed class WindowTracker
             RefreshSingleWindow(hwnd, allowCreate: true);
 
         RemoveDeadWindows();
-        RemoveHiddenWindows();
+        MarkHiddenWindows();
     }
 
     public void HandleEventHint(WindowEventHint hint)
@@ -112,6 +112,7 @@ public sealed class WindowTracker
         record.LastSeen = DateTimeOffset.Now;
         record.CurrentNativeDesktopId = nativeDesktopId == Guid.Empty ? _state.ActiveCompositeDesktopId : nativeDesktopId;
         record.HiddenByPmvd = false;
+        record.HiddenByUser = false;
 
         if (!record.Sticky)
         {
@@ -178,7 +179,7 @@ public sealed class WindowTracker
         }
     }
 
-    private void RemoveHiddenWindows()
+    private void MarkHiddenWindows()
     {
         var hiddenKeys = _state.Windows
             .Where(kv => !kv.Value.HiddenByPmvd &&
@@ -190,8 +191,8 @@ public sealed class WindowTracker
 
         foreach (var key in hiddenKeys)
         {
-            _state.Windows.Remove(key);
-            Log.Info($"Removed hidden window record {key}");
+            _state.Windows[key].HiddenByUser = true;
+            Log.Info($"Marked hidden window record {key}");
         }
     }
 }

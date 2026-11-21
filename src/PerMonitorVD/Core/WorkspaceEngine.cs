@@ -627,6 +627,7 @@ public sealed class WorkspaceEngine
             .GetWindowsForWorkspace(workspaceId)
             .Where(w => string.IsNullOrWhiteSpace(monitorKey) || string.Equals(w.MonitorKey, monitorKey, StringComparison.OrdinalIgnoreCase))
             .Where(w => !w.Sticky && !w.Ignored)
+            .Where(w => !w.HiddenByUser)
             .Where(w => _windowTracker.IsAlive(w));
     }
 
@@ -655,6 +656,9 @@ public sealed class WorkspaceEngine
 
     private async Task RestoreWindowAsync(WindowRecord window)
     {
+        if (window.HiddenByUser)
+            return;
+
         if (window.HiddenByPmvd)
         {
             ShowLogicalWindow(window);

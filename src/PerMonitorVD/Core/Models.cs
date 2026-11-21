@@ -63,6 +63,7 @@ public sealed class WindowRecord
     /// True when native VD parking failed or logicalHideShow mode intentionally hid the window.
     /// </summary>
     public bool HiddenByPmvd { get; set; }
+    public bool HiddenByUser { get; set; }
 
     public int NativeMoveFailureCount { get; set; }
 

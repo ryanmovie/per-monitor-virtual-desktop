@@ -129,7 +129,8 @@ public sealed class PerMonitorVdApplicationContext : ApplicationContext
         {
             await _engine.InitializeAsync();
             if (_config.EnableWorkspaceAnimation)
-                _overlay.WarmUp(_state.Monitors.Select(monitor => monitor.MonitorKey));
+                _overlay.WarmUp(_state.Monitors.Select(monitor =>
+                    (monitor.MonitorKey, monitor.Workspaces[monitor.CurrentWorkspaceIndex].WorkspaceId)));
 
             if (args.Length > 0)
             {

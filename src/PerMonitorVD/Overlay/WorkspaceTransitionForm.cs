@@ -18,6 +18,7 @@ internal sealed class WorkspaceTransitionForm : Form
     private int _durationMs;
     private Func<Bitmap> _captureIncoming;
     private bool _cancelled;
+    private bool _hasIncoming;
     private readonly Wpf.Controls.Grid _root = new() { ClipToBounds = true, IsHitTestVisible = false };
     private readonly Wpf.Controls.Image _oldImage = new() { Stretch = Media.Stretch.Fill };
     private readonly Wpf.Controls.Image _newImage = new() { Stretch = Media.Stretch.Fill, Visibility = Wpf.Visibility.Hidden };
@@ -39,6 +40,11 @@ internal sealed class WorkspaceTransitionForm : Form
     private static extern bool DeleteObject(IntPtr handle);
 
     public WorkspaceTransitionForm(Rectangle bounds, string deviceName, Bitmap outgoing, int direction, int durationMs, Func<Bitmap>? captureIncoming = null)
+        : this(bounds, deviceName, outgoing, null, direction, durationMs, captureIncoming)
+    {
+    }
+
+    public WorkspaceTransitionForm(Rectangle bounds, string deviceName, Bitmap outgoing, Bitmap? incoming, int direction, int durationMs, Func<Bitmap>? captureIncoming = null)
     {
         _captureIncoming = captureIncoming ?? (() => ScreenCapture.CaptureMonitorWorkArea(deviceName, MaximumFramePixels));
         _direction = direction < 0 ? -1 : 1;
@@ -52,6 +58,7 @@ internal sealed class WorkspaceTransitionForm : Form
 
         _oldImage.Source = ToBitmapSource(outgoing);
         outgoing.Dispose();
+        SetIncomingImage(incoming);
         _oldImage.RenderTransform = _oldOffset;
         _newImage.RenderTransform = _newOffset;
         _root.Children.Add(_oldImage);
@@ -60,14 +67,13 @@ internal sealed class WorkspaceTransitionForm : Form
         Controls.Add(_host);
     }
 
-    internal void PrepareFrame(Bitmap outgoing, int direction, int durationMs, Func<Bitmap> captureIncoming)
+    internal void PrepareFrame(Bitmap outgoing, Bitmap? incoming, int direction, int durationMs)
     {
         if (IsDisposed)
             throw new ObjectDisposedException(nameof(WorkspaceTransitionForm));
 
         ClearFrame();
         _cancelled = false;
-        _captureIncoming = captureIncoming;
         _direction = direction < 0 ? -1 : 1;
         _durationMs = Math.Clamp(durationMs, 100, 1000);
         _completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -77,6 +83,7 @@ internal sealed class WorkspaceTransitionForm : Form
         _oldOffset.X = 0;
         _newOffset.X = 0;
         outgoing.Dispose();
+        SetIncomingImage(incoming);
     }
 
     internal void ClearFrame()
@@ -87,7 +94,21 @@ internal sealed class WorkspaceTransitionForm : Form
         _oldImage.Source = null;
         _newImage.Source = null;
         _newImage.Visibility = Wpf.Visibility.Hidden;
+        _hasIncoming = false;
         _completion.TrySetResult();
+    }
+
+    private void SetIncomingImage(Bitmap? incoming)
+    {
+        if (incoming is null)
+        {
+            _hasIncoming = false;
+            return;
+        }
+
+        _newImage.Source = ToBitmapSource(incoming);
+        incoming.Dispose();
+        _hasIncoming = true;
     }
 
     internal void Cancel()
@@ -134,10 +155,13 @@ internal sealed class WorkspaceTransitionForm : Form
             return;
 
         DwmFlush();
-        using (var incoming = await ScreenCapture.CaptureWithTimeoutAsync(_captureIncoming))
-            _newImage.Source = ToBitmapSource(incoming);
-        if (_cancelled)
-            return;
+        if (!_hasIncoming)
+        {
+            using (var incoming = await ScreenCapture.CaptureWithTimeoutAsync(_captureIncoming))
+                _newImage.Source = ToBitmapSource(incoming);
+            if (_cancelled)
+                return;
+        }
 
         _root.UpdateLayout();
         var width = _root.ActualWidth;

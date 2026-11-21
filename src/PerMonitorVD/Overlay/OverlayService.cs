@@ -19,14 +19,20 @@ public sealed class OverlayService
     [DllImport("user32.dll")]
     private static extern bool SystemParametersInfo(uint action, uint parameter, out int value, uint flags);
 
-    internal async Task<WorkspaceTransitionForm?> BeginTransitionAsync(string monitorKey, int direction, int durationMs)
+    internal async Task<WorkspaceTransitionForm?> BeginTransitionAsync(
+        string monitorKey,
+        int direction,
+        int durationMs,
+        string outgoingWorkspaceId,
+        string incomingWorkspaceId)
     {
         if (_syncContext is null)
             return null;
 
         try
         {
-            return await InvokeOnUiThreadAsync(() => BeginTransitionOnUiThreadAsync(monitorKey, direction, durationMs));
+            return await InvokeOnUiThreadAsync(() => BeginTransitionOnUiThreadAsync(
+                monitorKey, direction, durationMs, outgoingWorkspaceId, incomingWorkspaceId));
         }
         catch (Exception ex)
         {
@@ -35,7 +41,12 @@ public sealed class OverlayService
         }
     }
 
-    private async Task<WorkspaceTransitionForm?> BeginTransitionOnUiThreadAsync(string monitorKey, int direction, int durationMs)
+    private async Task<WorkspaceTransitionForm?> BeginTransitionOnUiThreadAsync(
+        string monitorKey,
+        int direction,
+        int durationMs,
+        string outgoingWorkspaceId,
+        string incomingWorkspaceId)
     {
         // Respect Windows' reduced-animation preference. An unavailable system setting does
         // not stop a normal workspace switch.
@@ -51,6 +62,7 @@ public sealed class OverlayService
             indicator.Hide();
 
         Bitmap? outgoing = null;
+        Bitmap? incoming = null;
         WorkspaceTransitionForm? transition = null;
         try
         {
@@ -61,19 +73,21 @@ public sealed class OverlayService
                 await _animationTask;
             }
 
-            outgoing = TakePreviewFrame(monitorKey) ??
+            outgoing = CopyPreviewFrame(monitorKey, outgoingWorkspaceId) ??
                        await ScreenCapture.CaptureWithTimeoutAsync(() => ScreenCapture.CaptureMonitorWorkArea(display.DeviceName, WorkspaceTransitionForm.MaximumFramePixels));
+            incoming = CopyPreviewFrame(monitorKey, incomingWorkspaceId) ?? new Bitmap(outgoing);
             if (_transitions.TryGetValue(monitorKey, out var existing) && !existing.IsDisposed)
             {
-                existing.PrepareFrame(outgoing, direction, durationMs, () => ScreenCapture.CaptureMonitorWorkArea(display.DeviceName, WorkspaceTransitionForm.MaximumFramePixels));
+                existing.PrepareFrame(outgoing, incoming, direction, durationMs);
                 transition = existing;
             }
             else
             {
-                transition = new WorkspaceTransitionForm(display.WorkingArea, display.DeviceName, outgoing, direction, durationMs);
+                transition = new WorkspaceTransitionForm(display.WorkingArea, display.DeviceName, outgoing, incoming, direction, durationMs);
                 _transitions[monitorKey] = transition;
             }
             outgoing = null; // The form owns the frame from this point on.
+            incoming = null;
             await transition.ShowCoverAsync(display.WorkingArea);
             return transition;
         }
@@ -82,13 +96,26 @@ public sealed class OverlayService
             _transitions.Remove(monitorKey);
             transition?.Dispose();
             outgoing?.Dispose();
+            incoming?.Dispose();
             throw;
         }
     }
 
-    internal Task EndTransitionAsync(WorkspaceTransitionForm? transition, bool animate, string monitorKey)
+    internal Task EndTransitionAsync(
+        WorkspaceTransitionForm? transition,
+        bool animate,
+        string monitorKey,
+        string workspaceId,
+        bool refreshPreview)
     {
-        if (transition is null || _syncContext is null)
+        if (transition is null)
+        {
+            if (refreshPreview)
+                RefreshPreview(monitorKey, workspaceId);
+            return Task.CompletedTask;
+        }
+
+        if (_syncContext is null)
             return Task.CompletedTask;
 
         try
@@ -99,11 +126,13 @@ public sealed class OverlayService
                 {
                     transition.Hide();
                     transition.ClearFrame();
+                    if (refreshPreview)
+                        RefreshPreview(monitorKey, workspaceId);
                     return Task.FromResult(true);
                 });
             }
 
-            _animationTask = PlayTransitionAsync(transition, monitorKey);
+            _animationTask = PlayTransitionAsync(transition, monitorKey, workspaceId, refreshPreview);
         }
         catch (Exception ex)
         {
@@ -113,7 +142,11 @@ public sealed class OverlayService
         return Task.CompletedTask;
     }
 
-    private async Task PlayTransitionAsync(WorkspaceTransitionForm transition, string monitorKey)
+    private async Task PlayTransitionAsync(
+        WorkspaceTransitionForm transition,
+        string monitorKey,
+        string workspaceId,
+        bool refreshPreview)
     {
         try
         {
@@ -127,7 +160,8 @@ public sealed class OverlayService
                 {
                     transition.Hide();
                     transition.ClearFrame();
-                    RefreshPreview(monitorKey);
+                    if (refreshPreview)
+                        RefreshPreview(monitorKey, workspaceId);
                 }
                 return true;
             });
@@ -138,12 +172,14 @@ public sealed class OverlayService
         }
     }
 
-    private Bitmap? TakePreviewFrame(string monitorKey)
+    private Bitmap? CopyPreviewFrame(string monitorKey, string workspaceId)
     {
-        return _previewFrames.Remove(monitorKey, out var frame) ? frame : null;
+        return _previewFrames.TryGetValue(PreviewKey(monitorKey, workspaceId), out var frame)
+            ? new Bitmap(frame)
+            : null;
     }
 
-    private void RefreshPreview(string monitorKey)
+    private void RefreshPreview(string monitorKey, string workspaceId)
     {
         var screen = Screen.AllScreens.FirstOrDefault(s => string.Equals(Normalize(s.DeviceName), monitorKey, StringComparison.OrdinalIgnoreCase));
         if (screen is null)
@@ -168,16 +204,16 @@ public sealed class OverlayService
 
                 _syncContext.Post(_ =>
                 {
-                    if (_previewFrames.TryGetValue(monitorKey, out var previous))
+                    if (_previewFrames.TryGetValue(PreviewKey(monitorKey, workspaceId), out var previous))
                         previous.Dispose();
-                    _previewFrames[monitorKey] = frame;
+                    _previewFrames[PreviewKey(monitorKey, workspaceId)] = frame;
                 }, null);
             }, TaskScheduler.Default);
     }
 
-    internal void WarmUp(IEnumerable<string> monitorKeys)
+    internal void WarmUp(IEnumerable<(string MonitorKey, string WorkspaceId)> previews)
     {
-        foreach (var monitorKey in monitorKeys)
+        foreach (var (monitorKey, workspaceId) in previews)
         {
             var screen = Screen.AllScreens.FirstOrDefault(s => string.Equals(Normalize(s.DeviceName), monitorKey, StringComparison.OrdinalIgnoreCase));
             if (screen is not null && (!_transitions.TryGetValue(monitorKey, out var existing) || existing.IsDisposed))
@@ -192,9 +228,11 @@ public sealed class OverlayService
                     Log.Warn($"Could not warm up transition overlay for {monitorKey}: {ex.Message}");
                 }
             }
-            RefreshPreview(monitorKey);
+            RefreshPreview(monitorKey, workspaceId);
         }
     }
+
+    private static string PreviewKey(string monitorKey, string workspaceId) => $"{monitorKey}|{workspaceId}";
 
     private Task<T> InvokeOnUiThreadAsync<T>(Func<Task<T>> action)
     {

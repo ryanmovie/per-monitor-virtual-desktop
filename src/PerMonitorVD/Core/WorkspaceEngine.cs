@@ -562,7 +562,12 @@ public sealed class WorkspaceEngine
 
         var direction = TransitionMath.Direction(oldIndex, targetIndex, requestedDirection);
         var transition = _config.EnableWorkspaceAnimation
-            ? await _overlay.BeginTransitionAsync(monitor.MonitorKey, direction, _config.WorkspaceAnimationDurationMs)
+            ? await _overlay.BeginTransitionAsync(
+                monitor.MonitorKey,
+                direction,
+                _config.WorkspaceAnimationDurationMs,
+                oldSlot.WorkspaceId,
+                newSlot.WorkspaceId)
             : null;
         var switched = false;
         try
@@ -585,7 +590,12 @@ public sealed class WorkspaceEngine
         }
         finally
         {
-            await _overlay.EndTransitionAsync(transition, switched, monitorKey);
+            await _overlay.EndTransitionAsync(
+                transition,
+                switched,
+                monitorKey,
+                newSlot.WorkspaceId,
+                _config.EnableWorkspaceAnimation);
         }
         _overlay.ShowWorkspace(monitor.MonitorKey, newSlot.Label, _config.ShowOverlay);
     }

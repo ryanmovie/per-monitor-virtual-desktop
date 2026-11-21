@@ -690,15 +690,16 @@ public sealed class WorkspaceEngine
 
     private void HideLogicalWindow(WindowRecord window, string reason)
     {
+        window.HiddenByPmvd = true;
         try
         {
             Win32.ShowWindowAsync(window.HwndPtr, Win32.SW_HIDE);
-            window.HiddenByPmvd = true;
             window.CurrentNativeDesktopId = _state.ActiveCompositeDesktopId;
             Log.Info($"Logical hide {window.Hwnd} {window.ProcessName}. reason={reason}");
         }
         catch (Exception ex)
         {
+            window.HiddenByPmvd = false;
             window.NativeMoveFailureCount++;
             Log.Error(ex, $"Logical hide failed for {window.Hwnd}");
         }

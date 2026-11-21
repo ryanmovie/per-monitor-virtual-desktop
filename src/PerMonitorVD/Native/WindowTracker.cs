@@ -43,6 +43,7 @@ public sealed class WindowTracker
             RefreshSingleWindow(hwnd, allowCreate: true);
 
         RemoveDeadWindows();
+        RemoveHiddenWindows();
     }
 
     public void HandleEventHint(WindowEventHint hint)
@@ -174,6 +175,23 @@ public sealed class WindowTracker
         {
             _state.Windows.Remove(key);
             Log.Info($"Removed dead window record {key}");
+        }
+    }
+
+    private void RemoveHiddenWindows()
+    {
+        var hiddenKeys = _state.Windows
+            .Where(kv => !kv.Value.HiddenByPmvd &&
+                         (kv.Value.CurrentNativeDesktopId == Guid.Empty ||
+                          kv.Value.CurrentNativeDesktopId == _state.ActiveCompositeDesktopId) &&
+                         !Win32.IsWindowVisible(kv.Value.HwndPtr))
+            .Select(kv => kv.Key)
+            .ToArray();
+
+        foreach (var key in hiddenKeys)
+        {
+            _state.Windows.Remove(key);
+            Log.Info($"Removed hidden window record {key}");
         }
     }
 }

@@ -10,6 +10,7 @@ public sealed class OverlayService
     private readonly Dictionary<string, WorkspaceTransitionForm> _transitions = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, BitmapSource> _previewFrames = new(StringComparer.OrdinalIgnoreCase);
     private Task _animationTask = Task.CompletedTask;
+    private Task _cleanupTask = Task.CompletedTask;
     private bool _animationStarted;
     private readonly Dictionary<string, OverlayForm> _forms = new(StringComparer.OrdinalIgnoreCase);
 
@@ -74,6 +75,8 @@ public sealed class OverlayService
                     active.Cancel();
                 await _animationTask;
             }
+            if (!_cleanupTask.IsCompleted)
+                await _cleanupTask;
             _animationStarted = false;
 
             outgoing = CopyPreviewFrame(monitorKey, outgoingWorkspaceId);
@@ -146,16 +149,38 @@ public sealed class OverlayService
         string workspaceId,
         bool refreshPreview)
     {
+        if (!animate)
+        {
+            await InvokeOnUiThreadAsync(() =>
+            {
+                transition.Hide();
+                transition.ClearFrame();
+                if (refreshPreview)
+                    RefreshPreview(monitorKey, workspaceId);
+                return Task.FromResult(true);
+            });
+            return;
+        }
+
+        if (!_animationStarted)
+        {
+            _animationStarted = true;
+            _animationTask = PlayTransitionAsync(transition);
+        }
+
+        _cleanupTask = CleanupTransitionAsync(transition, monitorKey, workspaceId, refreshPreview);
+        await Task.CompletedTask;
+    }
+
+    private async Task CleanupTransitionAsync(
+        WorkspaceTransitionForm transition,
+        string monitorKey,
+        string workspaceId,
+        bool refreshPreview)
+    {
         try
         {
-            if (animate && !_animationStarted)
-            {
-                _animationStarted = true;
-                _animationTask = PlayTransitionAsync(transition);
-            }
-            if (animate)
-                await _animationTask;
-
+            await _animationTask;
             await InvokeOnUiThreadAsync(() =>
             {
                 transition.Hide();

@@ -208,7 +208,7 @@ internal sealed class WorkspaceTransitionForm : Form
         var end = TransitionMath.Offsets(width, 1, _direction);
         _newOffset.X = start.Incoming;
         _newImage.Visibility = Wpf.Visibility.Visible;
-        var easing = new Animation.CubicEase { EasingMode = Animation.EasingMode.EaseInOut };
+        var easing = new Animation.QuinticEase { EasingMode = Animation.EasingMode.EaseInOut };
         easing.Freeze();
         var duration = new Wpf.Duration(TimeSpan.FromMilliseconds(_durationMs));
         var incomingAnimation = new Animation.DoubleAnimation(start.Incoming, end.Incoming, duration) { EasingFunction = easing };

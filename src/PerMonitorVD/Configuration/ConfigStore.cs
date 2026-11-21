@@ -65,7 +65,7 @@ public sealed class ConfigStore
         config.ConfigVersion = Math.Max(config.ConfigVersion, 3);
         config.WorkspaceCountPerMonitor = Math.Clamp(config.WorkspaceCountPerMonitor, 1, 12);
         config.WinEventDebounceMs = Math.Clamp(config.WinEventDebounceMs <= 0 ? 160 : config.WinEventDebounceMs, 50, 2000);
-        config.WorkspaceAnimationDurationMs = Math.Clamp(config.WorkspaceAnimationDurationMs <= 0 ? 240 : config.WorkspaceAnimationDurationMs, 100, 1000);
+        config.WorkspaceAnimationDurationMs = Math.Clamp(config.WorkspaceAnimationDurationMs <= 0 ? 320 : config.WorkspaceAnimationDurationMs, 100, 1000);
         config.Hotkeys ??= new HotkeyConfig();
         config.Rules ??= AppConfig.DefaultRules();
         config.MonitorDesktopCounts ??= [];

@@ -9,7 +9,7 @@
   "RenameManagedDesktops": true,
   "ShowOverlay": true,
   "EnableWorkspaceAnimation": true,
-  "WorkspaceAnimationDurationMs": 240,
+  "WorkspaceAnimationDurationMs": 320,
   "StartPaused": false,
   "StartWithWindows": true,
   "EnsureTaskbarShowsAllDesktopWindows": true,

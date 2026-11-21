@@ -36,7 +36,7 @@ public sealed class AppConfig
     /// <summary>Animate workspace switches on the selected monitor.</summary>
     public bool EnableWorkspaceAnimation { get; set; } = true;
 
-    public int WorkspaceAnimationDurationMs { get; set; } = 240;
+    public int WorkspaceAnimationDurationMs { get; set; } = 320;
 
     public bool StartPaused { get; set; } = false;
 

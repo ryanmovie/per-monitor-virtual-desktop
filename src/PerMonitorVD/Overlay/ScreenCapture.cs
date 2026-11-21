@@ -7,7 +7,7 @@ namespace PerMonitorVD.Overlay;
 /// <summary>Captures a bounded, in-memory screen image for a short transition.</summary>
 internal static class ScreenCapture
 {
-    private const uint SourceCopyWithLayeredWindows = 0x40CC0020;
+    private const uint SourceCopy = 0x00CC0020;
     private const int ColorOnColor = 3;
     private static int _captureInProgress;
 
@@ -108,7 +108,7 @@ internal static class ScreenCapture
                 {
                     SetStretchBltMode(destination, ColorOnColor);
                     if (!StretchBlt(destination, 0, 0, width, height, source,
-                            bounds.Left, bounds.Top, bounds.Width, bounds.Height, SourceCopyWithLayeredWindows))
+                            bounds.Left, bounds.Top, bounds.Width, bounds.Height, SourceCopy))
                         throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not capture the monitor.");
                 }
                 finally

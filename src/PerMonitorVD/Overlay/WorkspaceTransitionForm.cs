@@ -13,7 +13,7 @@ namespace PerMonitorVD.Overlay;
 /// <summary>A short-lived, non-activating overlay for one monitor's work area.</summary>
 internal sealed class WorkspaceTransitionForm : Form
 {
-    internal const int MaximumFramePixels = 1920 * 1080;
+    internal const int MaximumFramePixels = 3840 * 2160;
     private int _direction;
     private int _durationMs;
     private Func<Bitmap> _captureIncoming;
@@ -50,11 +50,13 @@ internal sealed class WorkspaceTransitionForm : Form
         _direction = direction < 0 ? -1 : 1;
         _durationMs = Math.Clamp(durationMs, 100, 1000);
         AutoScaleMode = AutoScaleMode.None;
+        BackColor = Color.Black;
         FormBorderStyle = FormBorderStyle.None;
         StartPosition = FormStartPosition.Manual;
         ShowInTaskbar = false;
         TopMost = true;
         Bounds = bounds;
+        Opacity = 1;
 
         _oldImage.Source = ToBitmapSource(outgoing);
         outgoing.Dispose();
@@ -63,6 +65,7 @@ internal sealed class WorkspaceTransitionForm : Form
         _newImage.RenderTransform = _newOffset;
         _root.Children.Add(_oldImage);
         _root.Children.Add(_newImage);
+        _host.BackColor = Color.Black;
         _host.Child = _root;
         Controls.Add(_host);
     }
@@ -77,6 +80,7 @@ internal sealed class WorkspaceTransitionForm : Form
         _direction = direction < 0 ? -1 : 1;
         _durationMs = Math.Clamp(durationMs, 100, 1000);
         _completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Opacity = 1;
         _oldImage.Source = ToBitmapSource(outgoing);
         _oldImage.Visibility = Wpf.Visibility.Visible;
         _newImage.Visibility = Wpf.Visibility.Hidden;
@@ -133,6 +137,7 @@ internal sealed class WorkspaceTransitionForm : Form
 
     public async Task ShowCoverAsync(Rectangle expectedBounds)
     {
+        Opacity = 0;
         _ = Handle;
         if (!SetWindowDisplayAffinity(Handle, 0x11)) // WDA_EXCLUDEFROMCAPTURE
             throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not exclude the transition overlay from screen captures.");
@@ -142,6 +147,8 @@ internal sealed class WorkspaceTransitionForm : Form
         SetWindowPos(Handle, new IntPtr(-1), 0, 0, 0, 0, 0x0013); // topmost, no move/resize/activation
         _root.UpdateLayout();
         await _root.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Render);
+        DwmFlush();
+        Opacity = 1;
         DwmFlush();
 
         var actual = Bounds;

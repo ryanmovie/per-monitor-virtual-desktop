@@ -120,7 +120,7 @@ internal static class Program
     private static void ExistingConfigurationsRetainDefaults()
     {
         var config = new ConfigStore().Deserialize("{\"EnableWinCtrlOverride\":true}");
-        Check(config.EnableWorkspaceAnimation && config.WorkspaceAnimationDurationMs == 240, "Older configurations should receive animation defaults.");
+        Check(!config.EnableWorkspaceAnimation && config.WorkspaceAnimationDurationMs == 240, "Older configurations should keep animation disabled and receive duration defaults.");
         Check(config.Rules.Any(r => r.Process == "explorer.exe" && r.Mode == WindowRuleMode.Ignore), "File Explorer must remain excluded by default.");
         var copy = new AppConfig();
         config.EnableWorkspaceAnimation = false;

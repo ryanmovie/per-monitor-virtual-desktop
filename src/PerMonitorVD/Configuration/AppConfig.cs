@@ -34,7 +34,7 @@ public sealed class AppConfig
     public bool ShowOverlay { get; set; } = true;
 
     /// <summary>Animate workspace switches on the selected monitor.</summary>
-    public bool EnableWorkspaceAnimation { get; set; } = true;
+    public bool EnableWorkspaceAnimation { get; set; } = false;
 
     public int WorkspaceAnimationDurationMs { get; set; } = 240;
 

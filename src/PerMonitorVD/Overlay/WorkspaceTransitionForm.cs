@@ -19,6 +19,7 @@ internal sealed class WorkspaceTransitionForm : Form
     private Func<Bitmap> _captureIncoming;
     private bool _cancelled;
     private bool _hasIncoming;
+    private bool _prewarmed;
     private readonly Wpf.Controls.Grid _root = new() { ClipToBounds = true, IsHitTestVisible = false };
     private readonly Wpf.Controls.Image _oldImage = new() { Stretch = Media.Stretch.Fill };
     private readonly Wpf.Controls.Image _newImage = new() { Stretch = Media.Stretch.Fill, Visibility = Wpf.Visibility.Hidden };
@@ -75,19 +76,31 @@ internal sealed class WorkspaceTransitionForm : Form
         if (IsDisposed)
             throw new ObjectDisposedException(nameof(WorkspaceTransitionForm));
 
+        var oldSource = ToBitmapSource(outgoing);
+        outgoing.Dispose();
+        var incomingSource = incoming is null ? null : ToBitmapSource(incoming);
+        incoming?.Dispose();
+        PrepareFrame(oldSource, incomingSource, direction, durationMs);
+    }
+
+    internal void PrepareFrame(BitmapSource outgoing, BitmapSource? incoming, int direction, int durationMs)
+    {
+        if (IsDisposed)
+            throw new ObjectDisposedException(nameof(WorkspaceTransitionForm));
+
         ClearFrame();
         _cancelled = false;
         _direction = direction < 0 ? -1 : 1;
         _durationMs = Math.Clamp(durationMs, 100, 1000);
         _completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         Opacity = 1;
-        _oldImage.Source = ToBitmapSource(outgoing);
+        _oldImage.Source = outgoing;
         _oldImage.Visibility = Wpf.Visibility.Visible;
         _newImage.Visibility = Wpf.Visibility.Hidden;
         _oldOffset.X = 0;
         _newOffset.X = 0;
-        outgoing.Dispose();
-        SetIncomingImage(incoming);
+        _newImage.Source = incoming;
+        _hasIncoming = incoming is not null;
     }
 
     internal void ClearFrame()
@@ -121,6 +134,22 @@ internal sealed class WorkspaceTransitionForm : Form
         _completion.TrySetResult();
         _oldOffset.BeginAnimation(Media.TranslateTransform.XProperty, null);
         _newOffset.BeginAnimation(Media.TranslateTransform.XProperty, null);
+    }
+
+    internal void Prewarm()
+    {
+        if (IsDisposed || _prewarmed)
+            return;
+
+        Opacity = 0;
+        _ = Handle;
+        Show();
+        _root.UpdateLayout();
+        _root.Dispatcher.Invoke(() => { }, DispatcherPriority.Render);
+        DwmFlush();
+        Hide();
+        Opacity = 1;
+        _prewarmed = true;
     }
 
     protected override bool ShowWithoutActivation => true;
@@ -192,7 +221,7 @@ internal sealed class WorkspaceTransitionForm : Form
         await Task.WhenAny(_completion.Task, Task.Delay(_durationMs + 1500));
     }
 
-    private static BitmapSource ToBitmapSource(Bitmap bitmap)
+    internal static BitmapSource ToBitmapSource(Bitmap bitmap)
     {
         var handle = bitmap.GetHbitmap();
         try

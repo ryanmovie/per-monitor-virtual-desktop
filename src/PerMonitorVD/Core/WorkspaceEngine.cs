@@ -493,6 +493,7 @@ public sealed class WorkspaceEngine
         if (!_state.Windows.TryGetValue(key, out var record))
             return;
 
+        await Task.Delay(120);
         var nativeDesktopId = _desktopBridge.GetWindowDesktopId(hwnd);
         if (nativeDesktopId == Guid.Empty || nativeDesktopId == _state.ActiveCompositeDesktopId)
             return;

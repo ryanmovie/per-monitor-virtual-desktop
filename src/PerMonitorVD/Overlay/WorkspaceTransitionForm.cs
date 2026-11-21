@@ -13,17 +13,18 @@ namespace PerMonitorVD.Overlay;
 /// <summary>A short-lived, non-activating overlay for one monitor's work area.</summary>
 internal sealed class WorkspaceTransitionForm : Form
 {
-    internal const int MaximumFramePixels = 3840 * 2160;
-    private readonly int _direction;
-    private readonly int _durationMs;
-    private readonly Func<Bitmap> _captureIncoming;
+    internal const int MaximumFramePixels = 1920 * 1080;
+    private int _direction;
+    private int _durationMs;
+    private Func<Bitmap> _captureIncoming;
+    private bool _cancelled;
     private readonly Wpf.Controls.Grid _root = new() { ClipToBounds = true, IsHitTestVisible = false };
     private readonly Wpf.Controls.Image _oldImage = new() { Stretch = Media.Stretch.Fill };
     private readonly Wpf.Controls.Image _newImage = new() { Stretch = Media.Stretch.Fill, Visibility = Wpf.Visibility.Hidden };
     private readonly Media.TranslateTransform _oldOffset = new();
     private readonly Media.TranslateTransform _newOffset = new();
     private readonly ElementHost _host = new() { Dock = DockStyle.Fill };
-    private readonly TaskCompletionSource _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private TaskCompletionSource _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool SetWindowDisplayAffinity(IntPtr hwnd, uint affinity);
@@ -59,6 +60,44 @@ internal sealed class WorkspaceTransitionForm : Form
         Controls.Add(_host);
     }
 
+    internal void PrepareFrame(Bitmap outgoing, int direction, int durationMs, Func<Bitmap> captureIncoming)
+    {
+        if (IsDisposed)
+            throw new ObjectDisposedException(nameof(WorkspaceTransitionForm));
+
+        ClearFrame();
+        _cancelled = false;
+        _captureIncoming = captureIncoming;
+        _direction = direction < 0 ? -1 : 1;
+        _durationMs = Math.Clamp(durationMs, 100, 1000);
+        _completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _oldImage.Source = ToBitmapSource(outgoing);
+        _oldImage.Visibility = Wpf.Visibility.Visible;
+        _newImage.Visibility = Wpf.Visibility.Hidden;
+        _oldOffset.X = 0;
+        _newOffset.X = 0;
+        outgoing.Dispose();
+    }
+
+    internal void ClearFrame()
+    {
+        _cancelled = true;
+        _oldOffset.BeginAnimation(Media.TranslateTransform.XProperty, null);
+        _newOffset.BeginAnimation(Media.TranslateTransform.XProperty, null);
+        _oldImage.Source = null;
+        _newImage.Source = null;
+        _newImage.Visibility = Wpf.Visibility.Hidden;
+        _completion.TrySetResult();
+    }
+
+    internal void Cancel()
+    {
+        _cancelled = true;
+        _completion.TrySetResult();
+        _oldOffset.BeginAnimation(Media.TranslateTransform.XProperty, null);
+        _newOffset.BeginAnimation(Media.TranslateTransform.XProperty, null);
+    }
+
     protected override bool ShowWithoutActivation => true;
 
     protected override CreateParams CreateParams
@@ -84,19 +123,21 @@ internal sealed class WorkspaceTransitionForm : Form
         await _root.Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Render);
         DwmFlush();
 
-        var actual = new Rectangle(PointToScreen(Point.Empty), ClientSize);
+        var actual = Bounds;
         if (actual != expectedBounds)
             throw new InvalidOperationException($"Transition overlay bounds do not match the selected monitor: expected={expectedBounds}, actual={actual}.");
     }
 
     public async Task PlayAsync()
     {
-        if (IsDisposed || !Visible)
+        if (IsDisposed || !Visible || _cancelled)
             return;
 
         DwmFlush();
         using (var incoming = await ScreenCapture.CaptureWithTimeoutAsync(_captureIncoming))
             _newImage.Source = ToBitmapSource(incoming);
+        if (_cancelled)
+            return;
 
         _root.UpdateLayout();
         var width = _root.ActualWidth;
@@ -139,12 +180,8 @@ internal sealed class WorkspaceTransitionForm : Form
     {
         if (disposing)
         {
-            _oldOffset.BeginAnimation(Media.TranslateTransform.XProperty, null);
-            _newOffset.BeginAnimation(Media.TranslateTransform.XProperty, null);
-            _oldImage.Source = null;
-            _newImage.Source = null;
+            ClearFrame();
             _host.Child = null;
-            _completion.TrySetResult();
         }
         base.Dispose(disposing);
     }

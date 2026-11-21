@@ -6,6 +6,9 @@ namespace PerMonitorVD.Overlay;
 public sealed class OverlayService
 {
     private readonly SynchronizationContext? _syncContext;
+    private readonly Dictionary<string, WorkspaceTransitionForm> _transitions = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Bitmap> _previewFrames = new(StringComparer.OrdinalIgnoreCase);
+    private Task _animationTask = Task.CompletedTask;
     private readonly Dictionary<string, OverlayForm> _forms = new(StringComparer.OrdinalIgnoreCase);
 
     public OverlayService(SynchronizationContext? syncContext)
@@ -42,6 +45,7 @@ public sealed class OverlayService
         var screen = Screen.AllScreens.FirstOrDefault(s => string.Equals(Normalize(s.DeviceName), monitorKey, StringComparison.OrdinalIgnoreCase));
         if (screen is null || screen.WorkingArea.Width <= 0 || screen.WorkingArea.Height <= 0)
             return null;
+        var display = screen;
 
         if (_forms.TryGetValue(monitorKey, out var indicator) && !indicator.IsDisposed)
             indicator.Hide();
@@ -50,37 +54,80 @@ public sealed class OverlayService
         WorkspaceTransitionForm? transition = null;
         try
         {
-            outgoing = await ScreenCapture.CaptureWithTimeoutAsync(() => ScreenCapture.CaptureMonitorWorkArea(screen.DeviceName, WorkspaceTransitionForm.MaximumFramePixels));
-            transition = new WorkspaceTransitionForm(screen.WorkingArea, screen.DeviceName, outgoing, direction, durationMs);
+            if (!_animationTask.IsCompleted)
+            {
+                if (_transitions.TryGetValue(monitorKey, out var active))
+                    active.Cancel();
+                await _animationTask;
+            }
+
+            outgoing = TakePreviewFrame(monitorKey) ??
+                       await ScreenCapture.CaptureWithTimeoutAsync(() => ScreenCapture.CaptureMonitorWorkArea(display.DeviceName, WorkspaceTransitionForm.MaximumFramePixels));
+            if (_transitions.TryGetValue(monitorKey, out var existing) && !existing.IsDisposed)
+            {
+                existing.PrepareFrame(outgoing, direction, durationMs, () => ScreenCapture.CaptureMonitorWorkArea(display.DeviceName, WorkspaceTransitionForm.MaximumFramePixels));
+                transition = existing;
+            }
+            else
+            {
+                transition = new WorkspaceTransitionForm(display.WorkingArea, display.DeviceName, outgoing, direction, durationMs);
+                _transitions[monitorKey] = transition;
+            }
             outgoing = null; // The form owns the frame from this point on.
-            await transition.ShowCoverAsync(screen.WorkingArea);
+            await transition.ShowCoverAsync(display.WorkingArea);
             return transition;
         }
         catch
         {
+            _transitions.Remove(monitorKey);
             transition?.Dispose();
             outgoing?.Dispose();
             throw;
         }
     }
 
-    internal async Task EndTransitionAsync(WorkspaceTransitionForm? transition, bool animate)
+    internal Task EndTransitionAsync(WorkspaceTransitionForm? transition, bool animate, string monitorKey)
     {
         if (transition is null || _syncContext is null)
-            return;
+            return Task.CompletedTask;
 
+        try
+        {
+            if (!animate)
+            {
+                return InvokeOnUiThreadAsync(() =>
+                {
+                    transition.Hide();
+                    transition.ClearFrame();
+                    return Task.FromResult(true);
+                });
+            }
+
+            _animationTask = PlayTransitionAsync(transition, monitorKey);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"Desktop animation ended early; workspace switching continues: {ex.Message}");
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private async Task PlayTransitionAsync(WorkspaceTransitionForm transition, string monitorKey)
+    {
         try
         {
             await InvokeOnUiThreadAsync(async () =>
             {
                 try
                 {
-                    if (animate)
-                        await transition.PlayAsync();
+                    await transition.PlayAsync();
                 }
                 finally
                 {
-                    transition.Dispose();
+                    transition.Hide();
+                    transition.ClearFrame();
+                    RefreshPreview(monitorKey);
                 }
                 return true;
             });
@@ -88,6 +135,64 @@ public sealed class OverlayService
         catch (Exception ex)
         {
             Log.Warn($"Desktop animation ended early; workspace switching continues: {ex.Message}");
+        }
+    }
+
+    private Bitmap? TakePreviewFrame(string monitorKey)
+    {
+        return _previewFrames.Remove(monitorKey, out var frame) ? frame : null;
+    }
+
+    private void RefreshPreview(string monitorKey)
+    {
+        var screen = Screen.AllScreens.FirstOrDefault(s => string.Equals(Normalize(s.DeviceName), monitorKey, StringComparison.OrdinalIgnoreCase));
+        if (screen is null)
+            return;
+        var deviceName = screen.DeviceName;
+
+        _ = Task.Run(() => ScreenCapture.CaptureMonitorWorkArea(deviceName, WorkspaceTransitionForm.MaximumFramePixels))
+            .ContinueWith(task =>
+            {
+                if (!task.IsCompletedSuccessfully)
+                {
+                    Log.Warn($"Could not refresh transition preview for {monitorKey}: {task.Exception?.GetBaseException().Message}");
+                    return;
+                }
+
+                var frame = task.Result;
+                if (_syncContext is null)
+                {
+                    frame.Dispose();
+                    return;
+                }
+
+                _syncContext.Post(_ =>
+                {
+                    if (_previewFrames.TryGetValue(monitorKey, out var previous))
+                        previous.Dispose();
+                    _previewFrames[monitorKey] = frame;
+                }, null);
+            }, TaskScheduler.Default);
+    }
+
+    internal void WarmUp(IEnumerable<string> monitorKeys)
+    {
+        foreach (var monitorKey in monitorKeys)
+        {
+            var screen = Screen.AllScreens.FirstOrDefault(s => string.Equals(Normalize(s.DeviceName), monitorKey, StringComparison.OrdinalIgnoreCase));
+            if (screen is not null && (!_transitions.TryGetValue(monitorKey, out var existing) || existing.IsDisposed))
+            {
+                try
+                {
+                    _transitions[monitorKey] = new WorkspaceTransitionForm(
+                        screen.WorkingArea, screen.DeviceName, new Bitmap(1, 1), 1, 240);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn($"Could not warm up transition overlay for {monitorKey}: {ex.Message}");
+                }
+            }
+            RefreshPreview(monitorKey);
         }
     }
 

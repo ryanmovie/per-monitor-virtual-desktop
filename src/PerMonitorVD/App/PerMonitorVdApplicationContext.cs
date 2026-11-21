@@ -128,6 +128,8 @@ public sealed class PerMonitorVdApplicationContext : ApplicationContext
         try
         {
             await _engine.InitializeAsync();
+            if (_config.EnableWorkspaceAnimation)
+                _overlay.WarmUp(_state.Monitors.Select(monitor => monitor.MonitorKey));
 
             if (args.Length > 0)
             {

@@ -585,7 +585,7 @@ public sealed class WorkspaceEngine
         }
         finally
         {
-            await _overlay.EndTransitionAsync(transition, switched);
+            await _overlay.EndTransitionAsync(transition, switched, monitorKey);
         }
         _overlay.ShowWorkspace(monitor.MonitorKey, newSlot.Label, _config.ShowOverlay);
     }

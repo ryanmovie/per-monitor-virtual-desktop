@@ -147,6 +147,13 @@ public sealed class WindowTracker
 
     public bool IsAlive(WindowRecord record) => _inspector.IsAlive(record.HwndPtr);
 
+    public bool IsSameWindow(WindowRecord record) =>
+        IsAlive(record) &&
+        !string.IsNullOrWhiteSpace(record.ProcessName) &&
+        !string.IsNullOrWhiteSpace(record.ClassName) &&
+        string.Equals(_inspector.GetProcessName(record.HwndPtr), record.ProcessName, StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(_inspector.GetClassName(record.HwndPtr), record.ClassName, StringComparison.OrdinalIgnoreCase);
+
     public WindowPlacementSnapshot? CapturePlacement(IntPtr hwnd) => _placementStore.Capture(hwnd);
 
     public void RestorePlacement(IntPtr hwnd, WindowPlacementSnapshot snapshot) => _placementStore.Restore(hwnd, snapshot);

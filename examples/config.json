@@ -8,6 +8,8 @@
   "SwitchBackToActiveOnStartup": true,
   "RenameManagedDesktops": true,
   "ShowOverlay": true,
+  "EnableWorkspaceAnimation": true,
+  "WorkspaceAnimationDurationMs": 240,
   "StartPaused": false,
   "StartWithWindows": true,
   "EnsureTaskbarShowsAllDesktopWindows": true,

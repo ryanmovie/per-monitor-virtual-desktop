@@ -1,3 +1,6 @@
+using System.Runtime.InteropServices;
+using PerMonitorVD.Utilities;
+
 namespace PerMonitorVD.Overlay;
 
 public sealed class OverlayService
@@ -8,6 +11,100 @@ public sealed class OverlayService
     public OverlayService(SynchronizationContext? syncContext)
     {
         _syncContext = syncContext;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool SystemParametersInfo(uint action, uint parameter, out int value, uint flags);
+
+    internal async Task<WorkspaceTransitionForm?> BeginTransitionAsync(string monitorKey, int direction, int durationMs)
+    {
+        if (_syncContext is null)
+            return null;
+
+        try
+        {
+            return await InvokeOnUiThreadAsync(() => BeginTransitionOnUiThreadAsync(monitorKey, direction, durationMs));
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"Desktop animation could not start; switching normally: {ex.Message}");
+            return null;
+        }
+    }
+
+    private async Task<WorkspaceTransitionForm?> BeginTransitionOnUiThreadAsync(string monitorKey, int direction, int durationMs)
+    {
+        // Respect Windows' reduced-animation preference. An unavailable system setting does
+        // not stop a normal workspace switch.
+        if (SystemParametersInfo(0x1042, 0, out var animationsEnabled, 0) && animationsEnabled == 0)
+            return null;
+
+        var screen = Screen.AllScreens.FirstOrDefault(s => string.Equals(Normalize(s.DeviceName), monitorKey, StringComparison.OrdinalIgnoreCase));
+        if (screen is null || screen.WorkingArea.Width <= 0 || screen.WorkingArea.Height <= 0)
+            return null;
+
+        if (_forms.TryGetValue(monitorKey, out var indicator) && !indicator.IsDisposed)
+            indicator.Hide();
+
+        Bitmap? outgoing = null;
+        WorkspaceTransitionForm? transition = null;
+        try
+        {
+            outgoing = await ScreenCapture.CaptureWithTimeoutAsync(() => ScreenCapture.CaptureMonitorWorkArea(screen.DeviceName, WorkspaceTransitionForm.MaximumFramePixels));
+            transition = new WorkspaceTransitionForm(screen.WorkingArea, screen.DeviceName, outgoing, direction, durationMs);
+            outgoing = null; // The form owns the frame from this point on.
+            await transition.ShowCoverAsync(screen.WorkingArea);
+            return transition;
+        }
+        catch
+        {
+            transition?.Dispose();
+            outgoing?.Dispose();
+            throw;
+        }
+    }
+
+    internal async Task EndTransitionAsync(WorkspaceTransitionForm? transition, bool animate)
+    {
+        if (transition is null || _syncContext is null)
+            return;
+
+        try
+        {
+            await InvokeOnUiThreadAsync(async () =>
+            {
+                try
+                {
+                    if (animate)
+                        await transition.PlayAsync();
+                }
+                finally
+                {
+                    transition.Dispose();
+                }
+                return true;
+            });
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"Desktop animation ended early; workspace switching continues: {ex.Message}");
+        }
+    }
+
+    private Task<T> InvokeOnUiThreadAsync<T>(Func<Task<T>> action)
+    {
+        if (_syncContext is null)
+            throw new InvalidOperationException("The UI synchronization context is unavailable.");
+        if (SynchronizationContext.Current == _syncContext)
+            return action();
+
+        var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _syncContext.Post(async _ =>
+        {
+            try { completion.TrySetResult(await action()); }
+            catch (Exception ex) { completion.TrySetException(ex); }
+        }, null);
+        return completion.Task;
     }
 
     public void ShowWorkspace(string monitorKey, string label, bool enabled)

@@ -233,6 +233,7 @@ public sealed class WorkspaceEngine
         try
         {
             PrepareActiveCompositeDesktop();
+            PrepareMonitorWorkspaces();
             _desktopBridge.SwitchToDesktop(_state.ActiveCompositeDesktopId);
             Thread.Sleep(60);
             _windowTracker.RefreshVisibleWindows();
@@ -257,6 +258,7 @@ public sealed class WorkspaceEngine
         try
         {
             PrepareActiveCompositeDesktop();
+            PrepareMonitorWorkspaces();
             _desktopBridge.SwitchToDesktop(_state.ActiveCompositeDesktopId);
             Thread.Sleep(60);
 
@@ -529,7 +531,7 @@ public sealed class WorkspaceEngine
             if (target < 0) target = monitor.Workspaces.Count - 1;
             if (target >= monitor.Workspaces.Count) target = 0;
 
-            await SwitchWorkspaceCoreAsync(monitorKey, target);
+            await SwitchWorkspaceCoreAsync(monitorKey, target, delta);
         }
         catch (Exception ex)
         {
@@ -541,7 +543,7 @@ public sealed class WorkspaceEngine
         }
     }
 
-    private async Task SwitchWorkspaceCoreAsync(string monitorKey, int targetIndex)
+    private async Task SwitchWorkspaceCoreAsync(string monitorKey, int targetIndex, int? requestedDirection = null)
     {
         if (IsPaused) return;
         EnsureOnActiveCompositeDesktop();
@@ -558,20 +560,33 @@ public sealed class WorkspaceEngine
         var oldSlot = monitor.Workspaces[oldIndex];
         var newSlot = monitor.Workspaces[targetIndex];
 
-        foreach (var window in GetSwitchableWindows(oldSlot.WorkspaceId, monitor.MonitorKey).ToList())
+        var direction = TransitionMath.Direction(oldIndex, targetIndex, requestedDirection);
+        var transition = _config.EnableWorkspaceAnimation
+            ? await _overlay.BeginTransitionAsync(monitor.MonitorKey, direction, _config.WorkspaceAnimationDurationMs)
+            : null;
+        var switched = false;
+        try
         {
-            ParkWindow(window, oldSlot);
+            foreach (var window in GetSwitchableWindows(oldSlot.WorkspaceId, monitor.MonitorKey).ToList())
+            {
+                ParkWindow(window, oldSlot);
+            }
+
+            monitor.CurrentWorkspaceIndex = targetIndex;
+
+            foreach (var window in GetSwitchableWindows(newSlot.WorkspaceId, monitor.MonitorKey).ToList())
+            {
+                await RestoreWindowAsync(window);
+            }
+
+            _windowTracker.RefreshVisibleWindows();
+            _stateStore.Save(_state);
+            switched = true;
         }
-
-        monitor.CurrentWorkspaceIndex = targetIndex;
-
-        foreach (var window in GetSwitchableWindows(newSlot.WorkspaceId, monitor.MonitorKey).ToList())
+        finally
         {
-            await RestoreWindowAsync(window);
+            await _overlay.EndTransitionAsync(transition, switched);
         }
-
-        _windowTracker.RefreshVisibleWindows();
-        _stateStore.Save(_state);
         _overlay.ShowWorkspace(monitor.MonitorKey, newSlot.Label, _config.ShowOverlay);
     }
 
@@ -734,8 +749,23 @@ public sealed class WorkspaceEngine
     private void PrepareMonitorWorkspaces()
     {
         var desktops = _desktopBridge.GetDesktops();
+        if (_state.ActiveCompositeDesktopId == Guid.Empty || desktops.All(d => d.Id != _state.ActiveCompositeDesktopId))
+        {
+            // The active desktop can disappear while the application is running. Select the
+            // current desktop again, then ensure no parking slot can reuse it below.
+            PrepareActiveCompositeDesktop();
+            desktops = _desktopBridge.GetDesktops();
+        }
+
         var currentMonitors = _monitorResolver.GetCurrentMonitors();
         var oldMonitors = _state.Monitors.ToList();
+        var allocator = new ParkingDesktopAllocator(
+            _desktopBridge,
+            desktops,
+            _state.ActiveCompositeDesktopId,
+            oldMonitors.SelectMany(m => m.Workspaces),
+            _config.RenameManagedDesktops);
+        var reassignments = new List<(MonitorState Monitor, WorkspaceSlot Slot, ParkingDesktopAssignment Assignment)>();
         var existingMonitors = oldMonitors
             .Where(m => !string.IsNullOrWhiteSpace(m.MonitorKey))
             .GroupBy(m => m.MonitorKey, StringComparer.OrdinalIgnoreCase)
@@ -777,7 +807,7 @@ public sealed class WorkspaceEngine
             monitor.BoundsWidth = monitorInfo.Bounds.Width;
             monitor.BoundsHeight = monitorInfo.Bounds.Height;
             var workspaceCount = _config.GetDesktopCount(monitorInfo.Key);
-            monitor.Workspaces = EnsureWorkspaceSlots(monitor, monitorIndexBaseLabel: globalLabel, desktops, workspaceCount);
+            monitor.Workspaces = EnsureWorkspaceSlots(monitor, globalLabel, allocator, workspaceCount, reassignments);
             if (monitor.CurrentWorkspaceIndex < 0 || monitor.CurrentWorkspaceIndex >= monitor.Workspaces.Count)
                 monitor.CurrentWorkspaceIndex = Math.Max(0, monitor.Workspaces.Count - 1);
             ReassignWindowsFromRemovedWorkspaces(monitor);
@@ -789,6 +819,13 @@ public sealed class WorkspaceEngine
 
         _state.Monitors = rebuilt;
         _state.LastMonitorSignature = _monitorResolver.GetMonitorSignature();
+        ParkingWindowReconciler.Reconcile(
+            _state, reassignments, UseLogicalHideShowOnly(), _config.FallbackToLogicalHideShow,
+            _windowTracker.IsSameWindow,
+            window => _desktopBridge.GetWindowDesktopId(window.HwndPtr),
+            TryMoveNative,
+            HideLogicalWindow,
+            window => _windowTracker.RestorePlacement(window.HwndPtr, window.LastPlacement!));
     }
 
     private void MigrateMonitorIdentity(MonitorState monitor, MonitorDescriptor monitorInfo)
@@ -819,11 +856,18 @@ public sealed class WorkspaceEngine
         Log.Info($"Migrated monitor identity {oldKey} -> {monitorInfo.Key}");
     }
 
-    private List<WorkspaceSlot> EnsureWorkspaceSlots(MonitorState monitor, int monitorIndexBaseLabel, IReadOnlyList<NativeDesktopInfo> knownDesktops, int workspaceCount)
+    private List<WorkspaceSlot> EnsureWorkspaceSlots(
+        MonitorState monitor,
+        int monitorIndexBaseLabel,
+        ParkingDesktopAllocator allocator,
+        int workspaceCount,
+        List<(MonitorState Monitor, WorkspaceSlot Slot, ParkingDesktopAssignment Assignment)> reassignments)
     {
         var slots = new List<WorkspaceSlot>();
-        var byId = monitor.Workspaces.ToDictionary(w => w.WorkspaceId, StringComparer.OrdinalIgnoreCase);
-        var desktops = knownDesktops.ToList();
+        var byId = monitor.Workspaces
+            .Where(w => !string.IsNullOrWhiteSpace(w.WorkspaceId))
+            .GroupBy(w => w.WorkspaceId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
         for (var i = 0; i < workspaceCount; i++)
         {
@@ -845,26 +889,9 @@ public sealed class WorkspaceEngine
             slot.Label = label;
             slot.ParkingDesktopName = name;
 
-            var exists = slot.ParkingDesktopId != Guid.Empty && desktops.Any(d => d.Id == slot.ParkingDesktopId);
-            if (!exists)
-            {
-                var named = desktops.FirstOrDefault(d => string.Equals(d.Name, name, StringComparison.OrdinalIgnoreCase));
-                if (named is not null)
-                {
-                    slot.ParkingDesktopId = named.Id;
-                }
-                else
-                {
-                    var created = _desktopBridge.CreateDesktop(name);
-                    slot.ParkingDesktopId = created.Id;
-                    desktops.Add(created);
-                    Log.Info($"Created parking desktop {name} {created.Id}");
-                }
-            }
-            else if (_config.RenameManagedDesktops)
-            {
-                _desktopBridge.RenameDesktop(slot.ParkingDesktopId, name);
-            }
+            var assignment = allocator.Assign(slot, name);
+            if (assignment.Changed && assignment.PreviousExists)
+                reassignments.Add((monitor, slot, assignment));
 
             slots.Add(slot);
         }
@@ -895,6 +922,15 @@ public sealed class WorkspaceEngine
         var current = _desktopBridge.GetCurrentDesktop();
         if (current.Id == _state.ActiveCompositeDesktopId)
             return;
+
+        if (_desktopBridge.GetDesktops().All(d => d.Id != _state.ActiveCompositeDesktopId))
+        {
+            PrepareActiveCompositeDesktop();
+            PrepareMonitorWorkspaces();
+            current = _desktopBridge.GetCurrentDesktop();
+            if (current.Id == _state.ActiveCompositeDesktopId)
+                return;
+        }
 
         if (_config.SwitchBackToActiveOnStartup)
         {

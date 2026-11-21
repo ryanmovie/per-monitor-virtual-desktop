@@ -12,6 +12,7 @@ public sealed class TrayIconService : IDisposable
     private readonly Action<AppConfig> _onConfigSaved;
     private readonly Action _showHome;
     private readonly ToolStripMenuItem _otherDesktopAppsMenu = new("Other desktop apps");
+    private ToolStripMenuItem? _animationMenu;
 
     public TrayIconService(CommandRouter router, ConfigStore configStore, Action<AppConfig> onConfigSaved, Action showHome)
     {
@@ -47,6 +48,8 @@ public sealed class TrayIconService : IDisposable
         menu.Items.Add("Pause", null, async (_, _) => await _router.ExecuteAsync(new WorkspaceCommand { Type = WorkspaceCommandType.Pause }));
         menu.Items.Add("Resume", null, async (_, _) => await _router.ExecuteAsync(new WorkspaceCommand { Type = WorkspaceCommandType.Resume }));
         menu.Items.Add(new ToolStripSeparator());
+        _animationMenu = CreateAnimationMenuItem();
+        menu.Items.Add(_animationMenu);
         menu.Items.Add(CreateStartWithWindowsMenuItem());
         menu.Items.Add("Edit config", null, (_, _) => new ConfigEditorForm(_configStore, _onConfigSaved).Show());
         menu.Items.Add("Open config.json", null, (_, _) => OpenPath(AppPaths.ConfigPath));
@@ -54,8 +57,30 @@ public sealed class TrayIconService : IDisposable
         menu.Items.Add("Open config folder", null, (_, _) => OpenPath(AppPaths.BaseDirectory));
         menu.Items.Add("Exit", null, (_, _) => Application.Exit());
 
-        menu.Opening += async (_, _) => await RefreshOtherDesktopAppsMenuAsync();
+        menu.Opening += async (_, _) =>
+        {
+            if (_animationMenu is not null)
+                _animationMenu.Checked = _configStore.LoadOrCreate().EnableWorkspaceAnimation;
+            await RefreshOtherDesktopAppsMenuAsync();
+        };
         return menu;
+    }
+
+    private ToolStripMenuItem CreateAnimationMenuItem()
+    {
+        var item = new ToolStripMenuItem("Workspace animation")
+        {
+            Checked = _configStore.LoadOrCreate().EnableWorkspaceAnimation,
+            CheckOnClick = true
+        };
+        item.Click += (_, _) =>
+        {
+            var latest = _configStore.LoadOrCreate();
+            latest.EnableWorkspaceAnimation = item.Checked;
+            _configStore.Save(latest);
+            _onConfigSaved(latest);
+        };
+        return item;
     }
 
     private ToolStripMenuItem CreateStartWithWindowsMenuItem()

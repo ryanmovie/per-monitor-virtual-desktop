@@ -33,6 +33,11 @@ public sealed class AppConfig
 
     public bool ShowOverlay { get; set; } = true;
 
+    /// <summary>Animate workspace switches on the selected monitor.</summary>
+    public bool EnableWorkspaceAnimation { get; set; } = true;
+
+    public int WorkspaceAnimationDurationMs { get; set; } = 240;
+
     public bool StartPaused { get; set; } = false;
 
     /// <summary>
@@ -114,6 +119,8 @@ public sealed class AppConfig
         SwitchBackToActiveOnStartup = other.SwitchBackToActiveOnStartup;
         RenameManagedDesktops = other.RenameManagedDesktops;
         ShowOverlay = other.ShowOverlay;
+        EnableWorkspaceAnimation = other.EnableWorkspaceAnimation;
+        WorkspaceAnimationDurationMs = other.WorkspaceAnimationDurationMs;
         StartPaused = other.StartPaused;
         StartWithWindows = other.StartWithWindows;
         EnsureTaskbarShowsAllDesktopWindows = other.EnsureTaskbarShowsAllDesktopWindows;
